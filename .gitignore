@@ -1,0 +1,7 @@
+node_modules
+dist
+public/pdfjs
+fixtures/*.pdf
+.DS_Store
+.vercel
+.playwright-mcp
