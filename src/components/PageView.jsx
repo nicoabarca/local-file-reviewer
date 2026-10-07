@@ -157,13 +157,13 @@ function Marker({ marker, active, onActivate }) {
       {comment.rects.map((r, i) => (
         <div
           key={i}
-          className={`mark ${comment.type}${active ? ' active' : ''}`}
+          className={`mark ${comment.type}${comment.question ? ' question' : ''}${active ? ' active' : ''}`}
           style={rectStyle(r)}
         />
       ))}
       <button
         type="button"
-        className={`markTag${active ? ' active' : ''}`}
+        className={`markTag${comment.question ? ' question' : ''}${active ? ' active' : ''}`}
         style={{ left: pct(first[0]), top: pct(first[1]) }}
         onClick={() => onActivate(comment.id, { scrollList: true })}
         aria-label={`Comment ${number} on page ${comment.page}`}

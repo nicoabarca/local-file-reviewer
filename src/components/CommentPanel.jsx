@@ -2,16 +2,19 @@ import { useEffect, useRef, useState } from 'react';
 import { lineLabel } from '../lib/exportFeedback.js';
 import { formatRect } from '../lib/geometry.js';
 import { sectionLabel } from '../lib/htmlModel.js';
+import Answer from './Answer.jsx';
 
 function locationText(c, kind) {
   if (kind === 'html') {
     const parts = [sectionLabel(c.headingPath)];
     if (c.type === 'region') parts.push('region');
+    if (c.question) parts.push('question');
     return parts.join(' · ');
   }
   const parts = [`p. ${c.page}`];
   if (c.type === 'region') parts.push('region');
   else parts.push(lineLabel(c.visualLines) ?? 'lines n/a');
+  if (c.question) parts.push('question');
   return parts.join(' · ');
 }
 
@@ -31,7 +34,7 @@ function Quote({ location, kind }) {
   );
 }
 
-function CommentEditor({ initial = '', submitLabel, onSubmit, onCancel }) {
+function CommentEditor({ initial = '', submitLabel, placeholder = 'What should the agent change?', onSubmit, onCancel }) {
   const [text, setText] = useState(initial);
   const ref = useRef(null);
   useEffect(() => {
@@ -52,7 +55,7 @@ function CommentEditor({ initial = '', submitLabel, onSubmit, onCancel }) {
         value={text}
         rows={4}
         aria-label="Comment"
-        placeholder="What should the agent change?"
+        placeholder={placeholder}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
@@ -78,7 +81,7 @@ function CommentEditor({ initial = '', submitLabel, onSubmit, onCancel }) {
   );
 }
 
-function CommentCard({ item, kind, notFound, active, onActivate, onUpdate, onDelete }) {
+function CommentCard({ item, kind, notFound, active, live, onActivate, onUpdate, onDelete, onRetry }) {
   const { comment: c, number } = item;
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -89,7 +92,7 @@ function CommentCard({ item, kind, notFound, active, onActivate, onUpdate, onDel
   }, [active]);
 
   return (
-    <li ref={ref} className={`card${active ? ' active' : ''}`} data-comment-id={c.id}>
+    <li ref={ref} className={`card${c.question ? ' question' : ''}${active ? ' active' : ''}`} data-comment-id={c.id}>
       <button
         type="button"
         className="cardHead"
@@ -109,7 +112,7 @@ function CommentCard({ item, kind, notFound, active, onActivate, onUpdate, onDel
       {editing ? (
         <CommentEditor
           initial={c.comment}
-          submitLabel="Save"
+          submitLabel={c.question ? 'Ask again' : 'Save'}
           onSubmit={(text) => {
             onUpdate(c.id, text);
             setEditing(false);
@@ -119,11 +122,12 @@ function CommentCard({ item, kind, notFound, active, onActivate, onUpdate, onDel
       ) : (
         <p className="body">{c.comment}</p>
       )}
+      {c.question && !editing && <Answer comment={c} live={live} onRetry={onRetry} />}
       {!editing && (
         <div className="cardActions">
           {confirming ? (
             <>
-              <span className="hint">Delete this comment?</span>
+              <span className="hint">Delete this {c.question ? 'question' : 'comment'}?</span>
               <button type="button" className="btn ghost" onClick={() => setConfirming(false)} autoFocus>
                 Keep
               </button>
@@ -158,16 +162,23 @@ export default function CommentPanel({
   onActivate,
   onUpdate,
   onDelete,
+  answering,
+  onRetry,
 }) {
   return (
     <aside className="panel" aria-label="Comments">
       {draft && (
         <section className="composer" aria-label="New comment">
           <div className="panelLabel">
-            New comment <span className="muted">· {locationText(draft, kind)}</span>
+            {draft.question ? 'Ask Claude' : 'New comment'} <span className="muted">· {locationText(draft, kind)}</span>
           </div>
           <Quote location={draft} kind={kind} />
-          <CommentEditor submitLabel="Add comment" onSubmit={onSaveDraft} onCancel={onCancelDraft} />
+          <CommentEditor
+            submitLabel={draft.question ? 'Ask' : 'Add comment'}
+            placeholder={draft.question ? 'What do you want to know about this passage?' : undefined}
+            onSubmit={onSaveDraft}
+            onCancel={onCancelDraft}
+          />
         </section>
       )}
       <div className="panelLabel sticky">
@@ -190,9 +201,11 @@ export default function CommentPanel({
               kind={kind}
               notFound={missing.has(item.comment.id)}
               active={item.comment.id === activeId}
+              live={answering[item.comment.id]}
               onActivate={onActivate}
               onUpdate={onUpdate}
               onDelete={onDelete}
+              onRetry={onRetry}
             />
           ))}
         </ol>

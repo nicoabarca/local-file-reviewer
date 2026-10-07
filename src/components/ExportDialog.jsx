@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { buildPrompt } from '../lib/exportFeedback.js';
+import { agentComments, buildPrompt } from '../lib/exportFeedback.js';
 
 const short = (sha) => `${sha.slice(0, 12)}…`;
 
@@ -20,6 +20,8 @@ export default function ExportDialog({ open, review, pageCount, missing, blocked
     () => (open ? buildPrompt(review, { pageCount, missing }) : ''),
     [open, review, pageCount, missing],
   );
+  const comments = agentComments(review.comments);
+  const notFound = comments.filter((c) => missing.has(c.id)).length;
 
   const copy = async () => {
     try {
@@ -53,8 +55,8 @@ export default function ExportDialog({ open, review, pageCount, missing, blocked
           </dd>
           <dt>Comments</dt>
           <dd>
-            {review.comments.length}, in document order
-            {missing.size > 0 && ` · ${missing.size} not found in the document`}
+            {comments.length}, in document order
+            {notFound > 0 && ` · ${notFound} not found in the document`}
           </dd>
         </dl>
 

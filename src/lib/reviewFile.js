@@ -46,6 +46,10 @@ const isPixel = (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0 && 
 const isPositiveInt = (v) => Number.isInteger(v) && v >= 1;
 const isTime = (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0;
 
+/** A question asked to Claude about a passage, with its answer, if any. */
+const questionFields = (c, where) =>
+  c.question === true ? { question: true, answer: optionalText(c.answer, `${where} answer`) } : {};
+
 function parseComment(c, i, kind) {
   const where = `Comment ${i + 1}`;
   check(c && typeof c === 'object', `${where} is not an object`);
@@ -83,6 +87,7 @@ function parseComment(c, i, kind) {
       elementId: optionalText(c.elementId, `${where} element id`),
       continuesInto: text ? optionalText(c.continuesInto, `${where} section`) : null,
       comment: c.comment,
+      ...questionFields(c, where),
       createdAt: isTime(c.createdAt) ? c.createdAt : 0,
     };
   }
@@ -102,6 +107,7 @@ function parseComment(c, i, kind) {
     suffix: c.type === 'text' ? optionalText(c.suffix, `${where} suffix`) : null,
     visualLines: c.type === 'text' ? visualLines : null,
     comment: c.comment,
+    ...questionFields(c, where),
     createdAt: isTime(c.createdAt) ? c.createdAt : 0,
   };
 }

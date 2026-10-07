@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { claudeChannels } from './server/channels.js';
 
 // vercel.json is the single source of the Content-Security-Policy. Hosted, it
 // is sent as an HTTP header; the build also embeds it as a <meta> tag so
@@ -27,7 +28,7 @@ const csp = {
 // Local servers bind to the loopback interface only: never reachable from
 // other machines on the network.
 export default defineConfig({
-  plugins: [react(), csp],
+  plugins: [react(), csp, claudeChannels()],
   server: { host: '127.0.0.1', port: 5173 },
   preview: { host: '127.0.0.1', port: 5174 },
   test: { environment: 'node', include: ['src/**/*.test.js'] },
