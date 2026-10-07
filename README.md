@@ -27,27 +27,11 @@ Shortcuts: `C` comment · `Q` ask Claude · `R`/`T` region/text mode · `S` page
 
 Ask the Claude Code session you are working in about a passage, for example what a term means, without leaving the document. The question arrives in that session as a message, Claude answers with everything the session knows (including how the file was made), and the answer appears in the browser below your question. Questions are saved with the review but never go into the agent prompt.
 
-1. Add this function to your `~/.zshrc` (or `~/.bashrc`), with the absolute path to this repository, and open a new terminal:
-
-   ```sh
-   channels-claude() {
-     claude \
-       --mcp-config '{"mcpServers":{"reviewer":{"command":"node","args":["/path/to/local-file-reviewer/channel/reviewer-channel.js"]}}}' \
-       --dangerously-load-development-channels server:reviewer \
-       --settings '{"permissions":{"allow":["mcp__reviewer__reply"]}}' \
-       "$@"
-   }
-   ```
-
-   Then start your terminal sessions with `channels-claude` instead of `claude`. It takes any `claude` arguments, e.g. `channels-claude --resume <id>`. A session started with plain `claude` cannot receive questions.
-
-   - `--mcp-config` starts the reviewer channel for this session only.
-   - `--dangerously-load-development-channels` lets it push messages into the session; custom channels need it during the research preview. Claude Code shows a warning at every start; choose **I am using this for local development**.
-   - `--settings` pre-approves the channel's `reply` tool, so answers reach the browser without a permission prompt.
+1. Set up Claude Inbox, the Claude Code channel that carries the question, in `~/.claude/channels/inbox/`, and add its `channels-claude` shell function (see its README). Start your terminal sessions with `channels-claude` instead of `claude`; it takes any `claude` arguments, e.g. `channels-claude --resume <id>`. A session started with plain `claude` cannot receive questions.
 2. Run the app with `npm run dev` or `npm start`, open a document, and pick the session in the **Claude** menu in the top bar (it is picked for you when only one is running).
 3. Select text and press **Q** (or click **Ask Claude**).
 
-How it works: [channels](https://code.claude.com/docs/en/channels) (a Claude Code research preview) let an MCP server push messages into a running session. `channels-claude` adds `channel/reviewer-channel.js` as that server; it listens on a random localhost port and registers itself in `~/.local-file-reviewer/channels/` with a secret token. The app's server lists those sessions and forwards questions; Claude answers by calling the channel's `reply` tool.
+How it works: [channels](https://code.claude.com/docs/en/channels) (a Claude Code research preview) let an MCP server push messages into a running session. Each `channels-claude` session runs the inbox channel, which listens on a random localhost port and registers itself in `~/.claude/channels/inbox/sessions/` with a secret token. The app's server lists those sessions and asks the chosen one; Claude answers by calling the channel's `reply` tool.
 
 - The answer arrives whole, not streamed. If Claude is busy with a task, the question waits until that turn ends.
 - Questions and answers become part of the session's conversation, visible in the terminal.

@@ -1,15 +1,58 @@
-// "Ask Claude" through Claude Code channels: lists the Claude Code sessions
-// that run the reviewer channel (started with the `channels-claude` shell
-// function, see README) and forwards questions from the browser to the one
-// the user picked. Runs inside the Vite dev and preview servers only; a
-// static deploy has no /api/channels.
+// "Ask Claude" through the Claude Inbox channel: lists the Claude Code
+// sessions that run it (started with the `channels-claude` shell function, see
+// README) and forwards questions from the browser to the one the user picked.
+// Runs inside the Vite dev and preview servers only; a static deploy has no
+// /api/channels.
 //
 // The browser never talks to a channel directly: channels listen on other
 // ports and need the secret token from the registry, which only this server
 // can read.
 
+import { readFileSync, readdirSync } from 'node:fs';
 import { request } from 'node:http';
-import { liveChannels } from '../channel/registry.js';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
+/** Where inbox channels register, one `<id>.json` per running session (registry v1). */
+const REGISTRY_DIR = join(homedir(), '.claude', 'channels', 'inbox', 'sessions');
+
+/** How Claude should treat a reviewer question; travels with every question. */
+const FRAMING = [
+  'Local File Reviewer is a browser app where the person reads documents, often ones made in this session, and asks about passages they select.',
+  'Answer like a colleague who knows the document and this session: briefly, a few sentences unless the question needs more. You may read files to answer.',
+  'This question is read-only: do not edit files or run commands that change anything because of it. If it asks for a change, reply with what you would change; the person decides in the terminal.',
+  'Format: plain text. **bold**, `code` and lines starting with "- " are fine; no headings or tables.',
+].join('\n');
+
+function alive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err.code === 'EPERM';
+  }
+}
+
+/** Registry entries of running inbox channels, newest first. */
+function liveChannels() {
+  let names;
+  try {
+    names = readdirSync(REGISTRY_DIR);
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue;
+    try {
+      const entry = JSON.parse(readFileSync(join(REGISTRY_DIR, name), 'utf8'));
+      if (entry.v === 1 && alive(entry.pid)) out.push(entry);
+    } catch {
+      // half-written or foreign file: ignore
+    }
+  }
+  return out.sort((a, b) => b.startedAt - a.startedAt);
+}
 
 const MAX_BODY = 1024 * 1024;
 
@@ -98,6 +141,7 @@ async function handle(req, res) {
     } catch (err) {
       return sendJson(res, 400, { error: err.message });
     }
+    if (typeof body.prompt !== 'string' || !body.prompt) return sendJson(res, 400, { error: 'Missing question.' });
     const channel = liveChannels().find((c) => c.id === body.sessionId);
     if (!channel) return sendJson(res, 404, { error: 'That Claude session is no longer running.' });
 
@@ -107,7 +151,10 @@ async function handle(req, res) {
     try {
       const { status, body: answer } = await postToChannel(
         channel,
-        { prompt: body.prompt, document: body.document },
+        {
+          text: `${FRAMING}\n\n${body.prompt}`,
+          meta: { app: 'local-file-reviewer', document: String(body.document ?? '').slice(0, 200) },
+        },
         abort.signal,
       );
       return sendJson(res, status, answer);
