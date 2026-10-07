@@ -118,3 +118,14 @@ describe('review files', () => {
     expect(() => parseReviewFile(bad({ rects: [[10, 20, 5, 30]] }))).toThrow('invalid rectangles');
   });
 });
+
+describe('questions to Claude', () => {
+  it('keep their question flag and answer through a save and load', () => {
+    const asked = {
+      ...review,
+      comments: [{ ...review.comments[0], question: true, answer: 'It means X.' }],
+    };
+    const [c] = parseReviewFile(serializeReview(asked)).comments;
+    expect(c).toMatchObject({ question: true, answer: 'It means X.' });
+  });
+});

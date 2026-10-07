@@ -128,3 +128,29 @@ describe('HTML reviews', () => {
     expect(json.comments[1]).toMatchObject({ id: 'c2', elementId: 'flow', foundInDocument: true });
   });
 });
+
+describe('questions to Claude', () => {
+  const question = {
+    id: 'c3',
+    type: 'text',
+    page: 4,
+    rects: [[0.1, 0.1, 0.2, 0.12]],
+    selectedText: 'shared database',
+    comment: 'What is a shared database?',
+    question: true,
+    answer: 'One database used by several services.',
+    createdAt: 3,
+  };
+  const withQuestion = { ...review, comments: [...review.comments, question] };
+
+  it('are left out of the agent prompt and its JSON', () => {
+    const prompt = buildPrompt(withQuestion, { pageCount: 9, createdAt: new Date(0) });
+    expect(prompt).not.toContain('What is a shared database?');
+    expect(prompt).toContain('## Comments (2, in document order)');
+    expect(buildJson(withQuestion).comments.map((c) => c.id)).toEqual(['c1', 'c2']);
+  });
+
+  it('do not change the export signature', () => {
+    expect(contentSignature(withQuestion)).toBe(contentSignature(review));
+  });
+});

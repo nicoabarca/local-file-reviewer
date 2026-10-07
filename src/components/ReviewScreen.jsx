@@ -5,7 +5,8 @@ import PageSidebar from './PageSidebar.jsx';
 import OutlineSidebar from './OutlineSidebar.jsx';
 import CommentPanel from './CommentPanel.jsx';
 import ExportDialog from './ExportDialog.jsx';
-import { contentSignature, sortComments } from '../lib/exportFeedback.js';
+import { agentComments, contentSignature, sortComments } from '../lib/exportFeedback.js';
+import { ask, buildQuestion, listSessions, sessionLabel } from '../lib/ask.js';
 import { saveTextFile, watchSnapshot } from '../lib/files.js';
 import { HTML_WIDTH, sectionIndexAt } from '../lib/htmlModel.js';
 import { reviewFileName, serializeReview } from '../lib/reviewFile.js';
@@ -18,6 +19,8 @@ const PAGE_GUTTER = 64;
 
 const SIDEBAR_KEY = 'local-file-reviewer:sidebar';
 const LAYOUT_KEY = 'local-file-reviewer:layout';
+const SESSION_KEY = 'local-file-reviewer:claude-session';
+const SESSION_POLL_MS = 5000;
 const SPREAD_GAP = 24; // keep in sync with .spreadRow gap
 
 // Per-browser view preferences; storage may be unavailable.
@@ -83,6 +86,12 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
   const [outline, setOutline] = useState([]);
   const [currentSection, setCurrentSection] = useState(-1);
   const [missing, setMissing] = useState(() => new Set());
+  // Ask Claude: running Claude Code sessions with the reviewer channel (null
+  // when this server has no bridge), the one questions go to, and questions
+  // waiting for an answer, by comment id.
+  const [sessions, setSessions] = useState(null);
+  const [sessionId, setSessionId] = useState(() => readPref(SESSION_KEY, null));
+  const [answering, setAnswering] = useState({});
 
   const numbered = useMemo(
     () => sortComments(review.comments).map((comment, i) => ({ comment, number: i + 1 })),
@@ -105,7 +114,7 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
   }, [layout, isHtml]);
 
   const exported = review.lastExport?.signature === contentSignature(review);
-  const hasUnexported = !exported && (review.comments.length > 0 || review.lastExport != null);
+  const hasUnexported = !exported && (agentComments(review.comments).length > 0 || review.lastExport != null);
 
   // ---- autosave ---------------------------------------------------------
   const update = useCallback((fn) => {
@@ -133,6 +142,54 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
   }, [saveError]);
+
+  // ---- ask Claude ---------------------------------------------------------
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      const list = await listSessions();
+      if (!cancelled) setSessions(list);
+    };
+    refresh();
+    const timer = setInterval(refresh, SESSION_POLL_MS);
+    window.addEventListener('focus', refresh);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+      window.removeEventListener('focus', refresh);
+    };
+  }, []);
+
+  // The picked session if it is still running, else the only one running.
+  const claudeSession = sessions?.find((s) => s.id === sessionId) ?? (sessions?.length === 1 ? sessions[0] : null);
+  const askReady = Boolean(claudeSession);
+
+  const pickSession = (id) => {
+    setSessionId(id);
+    writePref(SESSION_KEY, id);
+  };
+
+  const setAnswer = (id, value) =>
+    setAnswering((a) => {
+      const { [id]: _, ...rest } = a;
+      return value ? { ...rest, [id]: value } : rest;
+    });
+
+  /** Send a question comment to the Claude session and put the answer in its card. */
+  const runQuestion = async (c) => {
+    if (!claudeSession) {
+      setAnswer(c.id, { status: 'error', error: 'No Claude session is attached.' });
+      return;
+    }
+    setAnswer(c.id, { status: 'waiting', session: claudeSession.project });
+    try {
+      const answer = await ask(claudeSession.id, { prompt: buildQuestion(c, c.comment, preview.name), document: preview.name });
+      update((r) => ({ ...r, comments: r.comments.map((x) => (x.id === c.id ? { ...x, answer } : x)) }));
+      setAnswer(c.id, null);
+    } catch (err) {
+      setAnswer(c.id, { status: 'error', error: err.message });
+    }
+  };
 
   // ---- file identity watch ---------------------------------------------
   useEffect(() => watchSnapshot(preview, () => setChanged(true)), [preview]);
@@ -242,16 +299,18 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
     }
   }, []);
 
-  const commentOnSelection = () => {
+  const commentOnSelection = ({ question = false } = {}) => {
     const result = pendingSelection ?? viewerRef.current?.captureSelection();
     if (!result?.ok) {
       setNotice(SELECTION_MESSAGES[result?.reason ?? 'empty'](result));
       return;
     }
     setNotice(null);
-    setDraft(result.location);
+    setDraft(question ? { ...result.location, question: true } : result.location);
     clearSelection();
   };
+
+  const askOnSelection = () => commentOnSelection({ question: true });
 
   const onRegion = useCallback((location) => {
     setNotice(null);
@@ -261,11 +320,10 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
 
   const saveDraft = (text) => {
     const id = `c${review.nextId}`;
-    update((r) => ({
-      ...r,
-      nextId: r.nextId + 1,
-      comments: [...r.comments, { ...draft, id, comment: text, createdAt: Date.now() }],
-    }));
+    const comment = { ...draft, id, comment: text, createdAt: Date.now() };
+    if (draft.question) comment.answer = null;
+    update((r) => ({ ...r, nextId: r.nextId + 1, comments: [...r.comments, comment] }));
+    if (draft.question) runQuestion(comment);
     setDraft(null);
     setActiveId(id);
     viewerRef.current?.focus();
@@ -292,12 +350,23 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
     viewerRef.current?.focus();
   };
 
-  const updateComment = (id, text) =>
-    update((r) => ({ ...r, comments: r.comments.map((c) => (c.id === id ? { ...c, comment: text } : c)) }));
+  const updateComment = (id, text) => {
+    const c = review.comments.find((x) => x.id === id);
+    // An edited question gets a new answer.
+    const next = c.question ? { ...c, comment: text, answer: null } : { ...c, comment: text };
+    update((r) => ({ ...r, comments: r.comments.map((x) => (x.id === id ? next : x)) }));
+    if (c.question) runQuestion(next);
+  };
+
+  const retryQuestion = (id) => {
+    const c = review.comments.find((x) => x.id === id);
+    if (c) runQuestion(c);
+  };
 
   const deleteComment = (id) => {
     update((r) => ({ ...r, comments: r.comments.filter((c) => c.id !== id) }));
     if (activeId === id) setActiveId(null);
+    setAnswer(id, null);
   };
 
   const activate = useCallback(
@@ -341,7 +410,8 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
     }
     if (isTyping(e.target)) return;
     const actions = {
-      c: commentOnSelection,
+      c: () => commentOnSelection(),
+      q: () => askReady && askOnSelection(),
       r: () => {
         clearSelection();
         setMode((m) => (m === 'region' ? 'text' : 'region'));
@@ -374,7 +444,7 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
   // ---- render -----------------------------------------------------------
   let status;
   if (saveError) status = <span className="status bad">Autosave failed — export now ({saveError})</span>;
-  else if (review.comments.length === 0 && !review.lastExport) status = <span className="status">No comments yet</span>;
+  else if (agentComments(review.comments).length === 0 && !review.lastExport) status = <span className="status">No comments yet</span>;
   else if (exported)
     status = (
       <span className="status ok" title="The agent prompt was copied after the last change">
@@ -523,6 +593,30 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
         </div>
 
         <div className="exportArea">
+          {sessions && (
+            <label
+              className="sessionPicker"
+              title={
+                sessions.length === 0
+                  ? 'No Claude Code session has the reviewer channel. Start one in a terminal with channels-claude (see the README; add --resume <id> to continue a session).'
+                  : `Questions go to this Claude Code session${claudeSession ? `, running in ${claudeSession.cwd}` : ''}`
+              }
+            >
+              <span>Claude</span>
+              <select
+                value={claudeSession?.id ?? ''}
+                disabled={sessions.length === 0}
+                onChange={(e) => pickSession(e.target.value || null)}
+              >
+                {!claudeSession && <option value="">{sessions.length === 0 ? 'no session' : 'pick a session'}</option>}
+                {sessions.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {sessionLabel(s)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           {status}
           <button
             type="button"
@@ -661,11 +755,14 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
           onActivate={activate}
           onUpdate={updateComment}
           onDelete={deleteComment}
+          answering={answering}
+          onRetry={retryQuestion}
         />
       </div>
 
       <footer className="keys" aria-label="Keyboard shortcuts">
         <span><kbd>C</kbd> comment on selection</span>
+        {askReady && <span><kbd>Q</kbd> ask Claude</span>}
         <span><kbd>R</kbd> region mode</span>
         <span><kbd>S</kbd> {isHtml ? 'outline' : 'page sidebar'}</span>
         {!isHtml && <span><kbd>V</kbd> 1 or 2 pages</span>}
@@ -678,19 +775,24 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
       </footer>
 
       {pendingSelection && !draft && (
-        <button
-          type="button"
-          className="selectionAction"
+        <div
+          className="selectionActions"
           style={{
-            left: Math.min(pendingSelection.anchor.x, window.innerWidth - 180),
+            left: Math.min(pendingSelection.anchor.x, window.innerWidth - (askReady ? 340 : 180)),
             top: Math.min(pendingSelection.anchor.y + 8, window.innerHeight - 48),
           }}
           // Keep the text selection alive while clicking.
           onMouseDown={(e) => e.preventDefault()}
-          onClick={commentOnSelection}
         >
-          + Add comment <kbd>C</kbd>
-        </button>
+          <button type="button" className="selectionAction" onClick={() => commentOnSelection()}>
+            + Add comment <kbd>C</kbd>
+          </button>
+          {askReady && (
+            <button type="button" className="selectionAction" onClick={askOnSelection}>
+              ? Ask Claude <kbd>Q</kbd>
+            </button>
+          )}
+        </div>
       )}
 
       <ExportDialog

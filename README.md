@@ -21,7 +21,23 @@ Chromium-based browsers (Chrome, Edge, Arc) can watch the opened file for change
 3. Press **E** and **Copy prompt**, then paste it into your agent. Nothing is written to disk.
 4. Open the agent's revised file: a file with different content always starts an empty review.
 
-Shortcuts: `C` comment · `R`/`T` region/text mode · `S` page sidebar (outline for HTML) · `V` one or two pages per row (PDF only) · `J`/`K` next/previous comment · `[`/`]` page (section for HTML) · `+`/`-`/`0` zoom · `E` agent prompt · `Esc` cancel. `⌘/Ctrl+Enter` saves a comment. Shortcuts also work while focus is inside an HTML document, except when typing in one of its form fields.
+Shortcuts: `C` comment · `Q` ask Claude · `R`/`T` region/text mode · `S` page sidebar (outline for HTML) · `V` one or two pages per row (PDF only) · `J`/`K` next/previous comment · `[`/`]` page (section for HTML) · `+`/`-`/`0` zoom · `E` agent prompt · `Esc` cancel. `⌘/Ctrl+Enter` saves a comment. Shortcuts also work while focus is inside an HTML document, except when typing in one of its form fields.
+
+## Ask Claude
+
+Ask the Claude Code session you are working in about a passage, for example what a term means, without leaving the document. The question arrives in that session as a message, Claude answers with everything the session knows (including how the file was made), and the answer appears in the browser below your question. Questions are saved with the review but never go into the agent prompt.
+
+1. Set up Claude Inbox, the Claude Code channel that carries the question, in `~/.claude/channels/inbox/`, and add its `channels-claude` shell function (see its README). Start your terminal sessions with `channels-claude` instead of `claude`; it takes any `claude` arguments, e.g. `channels-claude --resume <id>`. A session started with plain `claude` cannot receive questions.
+2. Run the app with `npm run dev` or `npm start`, open a document, and pick the session in the **Claude** menu in the top bar (it is picked for you when only one is running).
+3. Select text and press **Q** (or click **Ask Claude**).
+
+How it works: [channels](https://code.claude.com/docs/en/channels) (a Claude Code research preview) let an MCP server push messages into a running session. Each `channels-claude` session runs the inbox channel, which listens on a random localhost port and registers itself in `~/.claude/channels/inbox/sessions/` with a secret token. The app's server lists those sessions and asks the chosen one; Claude answers by calling the channel's `reply` tool.
+
+- The answer arrives whole, not streamed. If Claude is busy with a task, the question waits until that turn ends.
+- Questions and answers become part of the session's conversation, visible in the terminal.
+- Claude is told that questions are read-only: it may read files to answer but should not change anything because of a question.
+- Only this app's pages can ask. Scripts inside an opened HTML document run on the app's origin and could also ask.
+- A static deploy has no server, and the feature stays hidden.
 
 ## HTML documents
 

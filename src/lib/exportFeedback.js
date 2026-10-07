@@ -15,6 +15,9 @@ export function sortComments(comments) {
   });
 }
 
+/** Comments for the agent: questions asked to Claude stay in the review only. */
+export const agentComments = (comments) => comments.filter((c) => !c.question);
+
 export const HTML_COORDINATE_SYSTEM = `CSS pixels [left, top, right, bottom] in the document rendered at a ${HTML_WIDTH}px viewport width, origin at the top-left of the document`;
 
 const fileIdentity = (f) => ({ file: f.name, sha256: f.sha256, size: f.size });
@@ -34,7 +37,7 @@ export function buildJson(review, { pageCount = null, missing = new Set(), creat
       preview: fileIdentity(review.preview),
       coordinateSystem: HTML_COORDINATE_SYSTEM,
       warnings: review.warnings ?? [],
-      comments: sortComments(review.comments).map((c) => ({
+      comments: sortComments(agentComments(review.comments)).map((c) => ({
         id: c.id,
         type: c.type,
         section: c.headingPath ?? [],
@@ -56,7 +59,7 @@ export function buildJson(review, { pageCount = null, missing = new Set(), creat
     preview: { ...fileIdentity(review.preview), pages: pageCount },
     coordinateSystem: COORDINATE_SYSTEM,
     warnings: review.warnings ?? [],
-    comments: sortComments(review.comments).map((c) => ({
+    comments: sortComments(agentComments(review.comments)).map((c) => ({
       id: c.id,
       type: c.type,
       page: c.page,
@@ -135,7 +138,7 @@ export function buildPrompt(review, { pageCount = null, missing = new Set(), cre
   const { preview } = review;
   const kind = review.kind === 'html' ? 'html' : 'pdf';
   const doc = kind === 'html' ? 'HTML' : 'PDF';
-  const comments = sortComments(review.comments);
+  const comments = sortComments(agentComments(review.comments));
   const n = comments.length;
   const out = [];
 
@@ -206,6 +209,6 @@ export function buildPrompt(review, { pageCount = null, missing = new Set(), cre
 export function contentSignature(review) {
   return JSON.stringify([
     review.warnings ?? [],
-    sortComments(review.comments).map((c) => [c.id, c.comment, c.rects]),
+    sortComments(agentComments(review.comments)).map((c) => [c.id, c.comment, c.rects]),
   ]);
 }
