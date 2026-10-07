@@ -721,6 +721,20 @@ kbd {
   pointer-events: auto;
 }
 
+/* Questions to Claude: underlined, not shaded, so they read apart from comments. */
+.mark.text.question {
+  background: none;
+  border-bottom: 2px dotted var(--ink);
+}
+
+.mark.text.question.active {
+  background: rgb(11 11 12 / 0.12);
+}
+
+.markTag.question::before {
+  content: '?';
+}
+
 .markTag.active {
   outline: 2px solid var(--card);
   box-shadow: 0 0 0 4px var(--ink);
@@ -749,9 +763,14 @@ kbd {
   font-size: 11px;
 }
 
-.selectionAction {
+.selectionActions {
   position: fixed;
   z-index: 50;
+  display: flex;
+  gap: 10px;
+}
+
+.selectionAction {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -885,6 +904,48 @@ kbd {
   margin: 0 0 4px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.answer {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border: 1px dashed var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.answer p,
+.answer ul {
+  margin: 0 0 6px;
+}
+
+.answer p {
+  white-space: pre-wrap;
+}
+
+.answer ul {
+  padding-left: 18px;
+}
+
+.answer code {
+  background: var(--sunk);
+  padding: 0 3px;
+}
+
+.answerLabel {
+  margin-bottom: 4px;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.answerError {
+  margin: 0 0 6px;
+}
+
+.answer .btn {
+  height: 28px;
+  font-size: 12px;
 }
 
 .cardActions,

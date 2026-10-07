@@ -5,7 +5,8 @@ import PageSidebar from './PageSidebar.jsx';
 import OutlineSidebar from './OutlineSidebar.jsx';
 import CommentPanel from './CommentPanel.jsx';
 import ExportDialog from './ExportDialog.jsx';
-import { contentSignature, sortComments } from '../lib/exportFeedback.js';
+import { agentComments, contentSignature, sortComments } from '../lib/exportFeedback.js';
+import { ask, askAvailable, buildQuestion, closeAskSession, htmlText, openAskSession, pdfText } from '../lib/ask.js';
 import { saveTextFile, watchSnapshot } from '../lib/files.js';
 import { HTML_WIDTH, sectionIndexAt } from '../lib/htmlModel.js';
 import { reviewFileName, serializeReview } from '../lib/reviewFile.js';
@@ -83,6 +84,10 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
   const [outline, setOutline] = useState([]);
   const [currentSection, setCurrentSection] = useState(-1);
   const [missing, setMissing] = useState(() => new Set());
+  // Ask Claude: the local bridge is running, and answers being streamed, by comment id.
+  const [askReady, setAskReady] = useState(false);
+  const [answering, setAnswering] = useState({});
+  const openAsk = useRef(null);
 
   const numbered = useMemo(
     () => sortComments(review.comments).map((comment, i) => ({ comment, number: i + 1 })),
@@ -105,7 +110,7 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
   }, [layout, isHtml]);
 
   const exported = review.lastExport?.signature === contentSignature(review);
-  const hasUnexported = !exported && (review.comments.length > 0 || review.lastExport != null);
+  const hasUnexported = !exported && (agentComments(review.comments).length > 0 || review.lastExport != null);
 
   // ---- autosave ---------------------------------------------------------
   const update = useCallback((fn) => {
@@ -133,6 +138,57 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
   }, [saveError]);
+
+  // ---- ask Claude ---------------------------------------------------------
+  // Start this document's Claude session as soon as it opens, so the first
+  // question does not wait for the process to start.
+  useEffect(() => {
+    let cancelled = false;
+    let text = null;
+    const owner = crypto.randomUUID();
+    openAsk.current = async () => {
+      text ??= isHtml ? htmlText(html) : await pdfText(doc);
+      await openAskSession(preview.sha256, owner, preview.name, text);
+    };
+    (async () => {
+      if (!(await askAvailable()) || cancelled) return;
+      try {
+        await openAsk.current();
+        if (!cancelled) setAskReady(true);
+      } catch (err) {
+        console.error('Ask Claude unavailable:', err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      closeAskSession(preview.sha256, owner);
+    };
+  }, [preview, isHtml, html, doc]);
+
+  const setAnswer = (id, value) =>
+    setAnswering((a) => {
+      const { [id]: _, ...rest } = a;
+      return value ? { ...rest, [id]: value } : rest;
+    });
+
+  /** Send a question comment to Claude and stream the answer into its card. */
+  const runQuestion = async (c) => {
+    let text = '';
+    setAnswer(c.id, { status: 'thinking', text });
+    try {
+      await ask(preview.sha256, buildQuestion(c, c.comment), {
+        reopen: () => openAsk.current(),
+        onText: (chunk) => {
+          text += chunk;
+          setAnswer(c.id, { status: 'streaming', text });
+        },
+      });
+      update((r) => ({ ...r, comments: r.comments.map((x) => (x.id === c.id ? { ...x, answer: text } : x)) }));
+      setAnswer(c.id, null);
+    } catch (err) {
+      setAnswer(c.id, { status: 'error', text, error: err.message });
+    }
+  };
 
   // ---- file identity watch ---------------------------------------------
   useEffect(() => watchSnapshot(preview, () => setChanged(true)), [preview]);
@@ -242,16 +298,18 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
     }
   }, []);
 
-  const commentOnSelection = () => {
+  const commentOnSelection = ({ question = false } = {}) => {
     const result = pendingSelection ?? viewerRef.current?.captureSelection();
     if (!result?.ok) {
       setNotice(SELECTION_MESSAGES[result?.reason ?? 'empty'](result));
       return;
     }
     setNotice(null);
-    setDraft(result.location);
+    setDraft(question ? { ...result.location, question: true } : result.location);
     clearSelection();
   };
+
+  const askOnSelection = () => commentOnSelection({ question: true });
 
   const onRegion = useCallback((location) => {
     setNotice(null);
@@ -261,11 +319,10 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
 
   const saveDraft = (text) => {
     const id = `c${review.nextId}`;
-    update((r) => ({
-      ...r,
-      nextId: r.nextId + 1,
-      comments: [...r.comments, { ...draft, id, comment: text, createdAt: Date.now() }],
-    }));
+    const comment = { ...draft, id, comment: text, createdAt: Date.now() };
+    if (draft.question) comment.answer = null;
+    update((r) => ({ ...r, nextId: r.nextId + 1, comments: [...r.comments, comment] }));
+    if (draft.question) runQuestion(comment);
     setDraft(null);
     setActiveId(id);
     viewerRef.current?.focus();
@@ -292,12 +349,23 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
     viewerRef.current?.focus();
   };
 
-  const updateComment = (id, text) =>
-    update((r) => ({ ...r, comments: r.comments.map((c) => (c.id === id ? { ...c, comment: text } : c)) }));
+  const updateComment = (id, text) => {
+    const c = review.comments.find((x) => x.id === id);
+    // An edited question gets a new answer.
+    const next = c.question ? { ...c, comment: text, answer: null } : { ...c, comment: text };
+    update((r) => ({ ...r, comments: r.comments.map((x) => (x.id === id ? next : x)) }));
+    if (c.question) runQuestion(next);
+  };
+
+  const retryQuestion = (id) => {
+    const c = review.comments.find((x) => x.id === id);
+    if (c) runQuestion(c);
+  };
 
   const deleteComment = (id) => {
     update((r) => ({ ...r, comments: r.comments.filter((c) => c.id !== id) }));
     if (activeId === id) setActiveId(null);
+    setAnswer(id, null);
   };
 
   const activate = useCallback(
@@ -341,7 +409,8 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
     }
     if (isTyping(e.target)) return;
     const actions = {
-      c: commentOnSelection,
+      c: () => commentOnSelection(),
+      q: () => askReady && askOnSelection(),
       r: () => {
         clearSelection();
         setMode((m) => (m === 'region' ? 'text' : 'region'));
@@ -374,7 +443,7 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
   // ---- render -----------------------------------------------------------
   let status;
   if (saveError) status = <span className="status bad">Autosave failed — export now ({saveError})</span>;
-  else if (review.comments.length === 0 && !review.lastExport) status = <span className="status">No comments yet</span>;
+  else if (agentComments(review.comments).length === 0 && !review.lastExport) status = <span className="status">No comments yet</span>;
   else if (exported)
     status = (
       <span className="status ok" title="The agent prompt was copied after the last change">
@@ -661,11 +730,14 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
           onActivate={activate}
           onUpdate={updateComment}
           onDelete={deleteComment}
+          answering={answering}
+          onRetry={retryQuestion}
         />
       </div>
 
       <footer className="keys" aria-label="Keyboard shortcuts">
         <span><kbd>C</kbd> comment on selection</span>
+        {askReady && <span><kbd>Q</kbd> ask Claude</span>}
         <span><kbd>R</kbd> region mode</span>
         <span><kbd>S</kbd> {isHtml ? 'outline' : 'page sidebar'}</span>
         {!isHtml && <span><kbd>V</kbd> 1 or 2 pages</span>}
@@ -678,19 +750,24 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
       </footer>
 
       {pendingSelection && !draft && (
-        <button
-          type="button"
-          className="selectionAction"
+        <div
+          className="selectionActions"
           style={{
-            left: Math.min(pendingSelection.anchor.x, window.innerWidth - 180),
+            left: Math.min(pendingSelection.anchor.x, window.innerWidth - (askReady ? 340 : 180)),
             top: Math.min(pendingSelection.anchor.y + 8, window.innerHeight - 48),
           }}
           // Keep the text selection alive while clicking.
           onMouseDown={(e) => e.preventDefault()}
-          onClick={commentOnSelection}
         >
-          + Add comment <kbd>C</kbd>
-        </button>
+          <button type="button" className="selectionAction" onClick={() => commentOnSelection()}>
+            + Add comment <kbd>C</kbd>
+          </button>
+          {askReady && (
+            <button type="button" className="selectionAction" onClick={askOnSelection}>
+              ? Ask Claude <kbd>Q</kbd>
+            </button>
+          )}
+        </div>
       )}
 
       <ExportDialog

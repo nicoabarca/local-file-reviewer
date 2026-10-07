@@ -419,11 +419,11 @@ function Marker({ marker, active, onActivate }) {
   return (
     <>
       {rects.map((r, i) => (
-        <div key={i} className={`mark ${comment.type}${active ? ' active' : ''}`} style={px(r)} />
+        <div key={i} className={`mark ${comment.type}${comment.question ? ' question' : ''}${active ? ' active' : ''}`} style={px(r)} />
       ))}
       <button
         type="button"
-        className={`markTag${active ? ' active' : ''}`}
+        className={`markTag${comment.question ? ' question' : ''}${active ? ' active' : ''}`}
         style={{ left: first[0], top: first[1] }}
         onClick={() => onActivate(comment.id, { scrollList: true })}
         aria-label={`Comment ${number}`}

@@ -21,7 +21,16 @@ Chromium-based browsers (Chrome, Edge, Arc) can watch the opened file for change
 3. Press **E** and **Copy prompt**, then paste it into your agent. Nothing is written to disk.
 4. Open the agent's revised file: a file with different content always starts an empty review.
 
-Shortcuts: `C` comment · `R`/`T` region/text mode · `S` page sidebar (outline for HTML) · `V` one or two pages per row (PDF only) · `J`/`K` next/previous comment · `[`/`]` page (section for HTML) · `+`/`-`/`0` zoom · `E` agent prompt · `Esc` cancel. `⌘/Ctrl+Enter` saves a comment. Shortcuts also work while focus is inside an HTML document, except when typing in one of its form fields.
+Shortcuts: `C` comment · `Q` ask Claude · `R`/`T` region/text mode · `S` page sidebar (outline for HTML) · `V` one or two pages per row (PDF only) · `J`/`K` next/previous comment · `[`/`]` page (section for HTML) · `+`/`-`/`0` zoom · `E` agent prompt · `Esc` cancel. `⌘/Ctrl+Enter` saves a comment. Shortcuts also work while focus is inside an HTML document, except when typing in one of its form fields.
+
+## Ask Claude
+
+Select text and press **Q** (or click **Ask Claude**) to ask about the passage, for example what a term means. The answer streams into the same card, below the question. Questions are saved with the review but never go into the agent prompt.
+
+- Works only under `npm run dev` and `npm start`: the Vite server runs the [Claude Code](https://claude.com/claude-code) CLI (`claude`, which must be on your `PATH` and logged in). A static deploy has no such server, and the feature stays hidden.
+- Opening a document starts one `claude` process for it in the background, so answers start in about a second. The first question sends the document's full text (up to 400,000 characters); later questions send only the passage and the question, and Claude remembers earlier questions about the same document. After 30 questions, or 15 minutes without one, the process is replaced.
+- The process has no tools, no settings, hooks, plugins or MCP servers, and an empty working directory: it can only answer, and cannot read or change your files.
+- Only this app's pages can call it. Scripts inside an opened HTML document run on the app's origin and could also ask questions.
 
 ## HTML documents
 
