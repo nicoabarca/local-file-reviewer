@@ -4,7 +4,8 @@ import { locationFromRange } from '../lib/selection.js';
 
 /**
  * Scrollable document surface. Exposes imperative navigation through `ref`:
- *   scrollToPage(n), scrollToRect(page, rect), captureSelection(), viewportWidth()
+ *   scrollToPage(n), scrollToRect(page, rect), scrollToComment(c), captureSelection(),
+ *   clearSelection(), viewportWidth()
  */
 export default function Viewer({
   ref,
@@ -83,6 +84,9 @@ export default function Viewer({
         const el = pageEls.current.get(n) ?? pagesRef.current.querySelector(`[data-page-number="${n}"]`);
         el?.scrollIntoView({ behavior, block: 'start' });
       },
+      scrollToComment(c) {
+        this.scrollToRect(c.page, c.rects[0]);
+      },
       scrollToRect(page, rect) {
         const el = pagesRef.current.querySelector(`[data-page-number="${page}"]`);
         if (!el) return;
@@ -92,6 +96,7 @@ export default function Viewer({
         scrollRef.current.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
       },
       captureSelection,
+      clearSelection: () => window.getSelection()?.removeAllRanges(),
       viewportWidth: () => scrollRef.current.clientWidth,
       // preventScroll: a plain focus() cancels an in-flight smooth scroll.
       focus: () => scrollRef.current.focus({ preventScroll: true }),

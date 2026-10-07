@@ -3,7 +3,7 @@ import { buildPrompt } from '../lib/exportFeedback.js';
 
 const short = (sha) => `${sha.slice(0, 12)}…`;
 
-export default function ExportDialog({ open, review, pageCount, blocked, onClose, onExported }) {
+export default function ExportDialog({ open, review, pageCount, missing, blocked, onClose, onExported }) {
   const ref = useRef(null);
   const textRef = useRef(null);
   const [copied, setCopied] = useState(null);
@@ -16,7 +16,10 @@ export default function ExportDialog({ open, review, pageCount, blocked, onClose
     } else if (!open && d.open) d.close();
   }, [open]);
 
-  const prompt = useMemo(() => (open ? buildPrompt(review, { pageCount }) : ''), [open, review, pageCount]);
+  const prompt = useMemo(
+    () => (open ? buildPrompt(review, { pageCount, missing }) : ''),
+    [open, review, pageCount, missing],
+  );
 
   const copy = async () => {
     try {
@@ -44,12 +47,15 @@ export default function ExportDialog({ open, review, pageCount, blocked, onClose
         </header>
 
         <dl className="identity">
-          <dt>Reviewed PDF</dt>
+          <dt>Reviewed {review.kind === 'html' ? 'HTML' : 'PDF'}</dt>
           <dd>
             {review.preview.name} <code>{short(review.preview.sha256)}</code>
           </dd>
           <dt>Comments</dt>
-          <dd>{review.comments.length}, in page order</dd>
+          <dd>
+            {review.comments.length}, in document order
+            {missing.size > 0 && ` · ${missing.size} not found in the document`}
+          </dd>
         </dl>
 
         {blocked ? (

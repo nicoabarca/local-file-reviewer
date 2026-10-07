@@ -1137,3 +1137,74 @@ kbd {
   height: 11px;
   border: 1.5px solid currentColor;
 }
+
+/* ---- HTML documents --------------------------------------------------- */
+
+.htmlSurface {
+  inset: 0 auto auto 0;
+  transform-origin: 0 0;
+}
+
+.htmlFrame {
+  display: block;
+  border: 0;
+  background: #fff;
+}
+
+.mode-region .htmlFrame {
+  pointer-events: none;
+}
+
+.sidebar.outline {
+  width: 240px;
+}
+
+.outlineList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.outlineItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 6px 4px calc(6px + var(--depth, 0) * 12px);
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+
+.outlineItem:hover {
+  background: var(--sunk);
+}
+
+.outlineItem.current {
+  font-weight: 700;
+  box-shadow: inset 3px 0 0 var(--ink);
+}
+
+.outlineText {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sectionName {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notFound {
+  font-weight: 700;
+}

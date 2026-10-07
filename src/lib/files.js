@@ -23,7 +23,12 @@ export async function snapshot(file, handle = null) {
   };
 }
 
-const PDF_TYPES = [{ description: 'PDF preview', accept: { 'application/pdf': ['.pdf'] } }];
+const DOC_TYPES = [
+  { description: 'PDF or HTML document', accept: { 'application/pdf': ['.pdf'], 'text/html': ['.html', '.htm'] } },
+];
+
+export const isPdf = (file) => /\.pdf$/i.test(file.name) || file.type === 'application/pdf';
+export const isHtml = (file) => /\.html?$/i.test(file.name) || file.type === 'text/html';
 
 function pickWithInput(accept) {
   return new Promise((resolve) => {
@@ -36,18 +41,18 @@ function pickWithInput(accept) {
   });
 }
 
-/** Ask the user for a PDF. Returns { file, handle? } or null when cancelled. */
+/** Ask the user for a PDF or HTML file. Returns { file, handle? } or null when cancelled. */
 export async function pickFile() {
   if (canPickFiles) {
     try {
-      const [handle] = await window.showOpenFilePicker({ id: 'review-pdf', types: PDF_TYPES });
+      const [handle] = await window.showOpenFilePicker({ id: 'review-pdf', types: DOC_TYPES });
       return { file: await handle.getFile(), handle };
     } catch (err) {
       if (err.name === 'AbortError') return null;
       throw err;
     }
   }
-  return pickWithInput('application/pdf,.pdf');
+  return pickWithInput('application/pdf,.pdf,text/html,.html,.htm');
 }
 
 /** Files from a drop event, with handles when the browser provides them. */

@@ -1,17 +1,26 @@
 import { useEffect, useRef, useState } from 'react';
 import { lineLabel } from '../lib/exportFeedback.js';
 import { formatRect } from '../lib/geometry.js';
+import { sectionLabel } from '../lib/htmlModel.js';
 
-function locationText(c) {
+function locationText(c, kind) {
+  if (kind === 'html') {
+    const parts = [sectionLabel(c.headingPath)];
+    if (c.type === 'region') parts.push('region');
+    return parts.join(' · ');
+  }
   const parts = [`p. ${c.page}`];
   if (c.type === 'region') parts.push('region');
   else parts.push(lineLabel(c.visualLines) ?? 'lines n/a');
   return parts.join(' · ');
 }
 
-function Quote({ location }) {
+const formatPixels = (r) => `[${r.map((v) => Math.round(v)).join(', ')}] px`;
+
+function Quote({ location, kind }) {
   if (location.type === 'region') {
-    return <div className="quote regionQuote">{formatRect(location.rects[0])}</div>;
+    const rect = location.rects[0];
+    return <div className="quote regionQuote">{kind === 'html' ? formatPixels(rect) : formatRect(rect)}</div>;
   }
   return (
     <blockquote className="quote">
@@ -69,7 +78,7 @@ function CommentEditor({ initial = '', submitLabel, onSubmit, onCancel }) {
   );
 }
 
-function CommentCard({ item, active, onActivate, onUpdate, onDelete }) {
+function CommentCard({ item, kind, notFound, active, onActivate, onUpdate, onDelete }) {
   const { comment: c, number } = item;
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -85,13 +94,18 @@ function CommentCard({ item, active, onActivate, onUpdate, onDelete }) {
         type="button"
         className="cardHead"
         onClick={() => onActivate(c.id, { scrollDoc: true })}
-        aria-label={`Comment ${number}, ${locationText(c)}. Show in document.`}
+        aria-label={`Comment ${number}, ${locationText(c, kind)}${notFound ? ', not found in document' : ''}. Show in document.`}
       >
         <span className="num">{String(number).padStart(2, '0')}</span>
-        <span className="loc">{locationText(c)}</span>
+        <span className="loc">{locationText(c, kind)}</span>
         <span className="cid">{c.id}</span>
       </button>
-      <Quote location={c} />
+      {notFound && (
+        <p className="hint notFound" title="The quote is not in the document as currently rendered, usually because a script changed the text. It is still included in the prompt.">
+          Not found in document
+        </p>
+      )}
+      <Quote location={c} kind={kind} />
       {editing ? (
         <CommentEditor
           initial={c.comment}
@@ -133,15 +147,26 @@ function CommentCard({ item, active, onActivate, onUpdate, onDelete }) {
   );
 }
 
-export default function CommentPanel({ numbered, draft, activeId, onSaveDraft, onCancelDraft, onActivate, onUpdate, onDelete }) {
+export default function CommentPanel({
+  kind,
+  missing,
+  numbered,
+  draft,
+  activeId,
+  onSaveDraft,
+  onCancelDraft,
+  onActivate,
+  onUpdate,
+  onDelete,
+}) {
   return (
     <aside className="panel" aria-label="Comments">
       {draft && (
         <section className="composer" aria-label="New comment">
           <div className="panelLabel">
-            New comment <span className="muted">· {locationText(draft)}</span>
+            New comment <span className="muted">· {locationText(draft, kind)}</span>
           </div>
-          <Quote location={draft} />
+          <Quote location={draft} kind={kind} />
           <CommentEditor submitLabel="Add comment" onSubmit={onSaveDraft} onCancel={onCancelDraft} />
         </section>
       )}
@@ -152,8 +177,8 @@ export default function CommentPanel({ numbered, draft, activeId, onSaveDraft, o
         <div className="empty">
           <p>No comments yet.</p>
           <p className="muted">
-            Select text and press <kbd>C</kbd>, or switch to <kbd>R</kbd> region mode and drag a box over a figure or
-            scanned page.
+            Select text and press <kbd>C</kbd>, or switch to <kbd>R</kbd> region mode and drag a box over a figure
+            {kind === 'html' ? ' or diagram.' : ' or scanned page.'}
           </p>
         </div>
       ) : (
@@ -162,6 +187,8 @@ export default function CommentPanel({ numbered, draft, activeId, onSaveDraft, o
             <CommentCard
               key={item.comment.id}
               item={item}
+              kind={kind}
+              notFound={missing.has(item.comment.id)}
               active={item.comment.id === activeId}
               onActivate={onActivate}
               onUpdate={onUpdate}

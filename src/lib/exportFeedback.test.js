@@ -65,3 +65,66 @@ describe('contentSignature', () => {
     expect(contentSignature(edited)).not.toBe(contentSignature(review));
   });
 });
+
+describe('HTML reviews', () => {
+  const html = {
+    id: 'r2',
+    kind: 'html',
+    preview: { name: 'architecture.html', sha256: 'bb', size: 2 },
+    warnings: [],
+    comments: [
+      {
+        id: 'c2',
+        type: 'region',
+        page: 1,
+        rects: [[100, 1500.4, 700, 1900]],
+        headingPath: ['Architecture', 'Diagrams'],
+        elementId: 'flow',
+        comment: 'Label the arrow.',
+        createdAt: 2,
+      },
+      {
+        id: 'c1',
+        type: 'text',
+        page: 1,
+        rects: [[40, 812, 610, 834]],
+        selectedText: 'Each service writes to the shared database.',
+        prefix: 'The gateway validates requests. ',
+        suffix: ' Changes are logged centrally.',
+        headingPath: ['Architecture', 'Storage'],
+        elementId: null,
+        continuesInto: 'Retention',
+        comment: 'Explain why.',
+        createdAt: 1,
+      },
+    ],
+  };
+  const prompt = buildPrompt(html, { missing: new Set(['c1']), createdAt: new Date(0) });
+
+  it('describes the HTML document and asks for its source to be revised', () => {
+    expect(prompt).toContain('A human reviewed the HTML `architecture.html`');
+    expect(prompt).toContain('Reviewed HTML: `architecture.html` — sha256 `bb`');
+    expect(prompt).toContain('Revise the editable source this HTML was generated from');
+    expect(prompt).toContain('headless browser with a 1024px wide viewport');
+    expect(prompt).not.toContain('pdftoppm');
+  });
+
+  it('locates comments by section, id and pixel rectangle', () => {
+    const first = prompt.indexOf('### Comment 1 — Architecture › Storage `[c1]`');
+    const second = prompt.indexOf('### Comment 2 — Architecture › Diagrams, region `[c2]`');
+    expect(first).toBeGreaterThan(0);
+    expect(second).toBeGreaterThan(first);
+    expect(prompt).toContain('- Continues into: Retention');
+    expect(prompt).toContain('- Element id: `flow`');
+    expect(prompt).toContain('- Location: [100, 1500, 700, 1900] px');
+    expect(prompt).toContain('- **Not found** in the document when this prompt was built');
+  });
+
+  it('exports HTML-specific JSON', () => {
+    const json = buildJson(html, { missing: new Set(['c1']), createdAt: new Date(0) });
+    expect(json.kind).toBe('html');
+    expect(json.preview).toEqual({ file: 'architecture.html', sha256: 'bb', size: 2 });
+    expect(json.comments[0]).toMatchObject({ id: 'c1', section: ['Architecture', 'Storage'], foundInDocument: false });
+    expect(json.comments[1]).toMatchObject({ id: 'c2', elementId: 'flow', foundInDocument: true });
+  });
+});

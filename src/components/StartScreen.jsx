@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { filesFromDrop, pickFile, pickJsonFile } from '../lib/files.js';
+import { filesFromDrop, isHtml, isPdf, pickFile, pickJsonFile } from '../lib/files.js';
 import { deleteHandle, fileFromHandle, getHandle } from '../lib/handles.js';
 import { parseReviewFile } from '../lib/reviewFile.js';
 import {
@@ -11,7 +11,6 @@ import {
   saveReview,
 } from '../lib/storage.js';
 
-const isPdf = (file) => /\.pdf$/i.test(file.name) || file.type === 'application/pdf';
 const isJson = (file) => /\.json$/i.test(file.name) || file.type === 'application/json';
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
@@ -28,15 +27,15 @@ export default function StartScreen({ onStart, busy, error }) {
 
   const open = (picked, options) => {
     if (!picked) return;
-    if (!isPdf(picked.file)) {
-      setLocalError(`${picked.file.name} is not a PDF. Export a PDF preview of the document first.`);
+    if (!isPdf(picked.file) && !isHtml(picked.file)) {
+      setLocalError(`${picked.file.name} is not a PDF or HTML file. Export a PDF or HTML preview of the document first.`);
       return;
     }
     setLocalError(null);
     onStart(picked, options);
   };
 
-  /** Reopen the PDF of a saved review: its remembered file if possible, otherwise ask for it. */
+  /** Reopen the document of a saved review: its remembered file if possible, otherwise ask for it. */
   const resume = async (r) => {
     setLocalError(null);
     try {
@@ -57,7 +56,7 @@ export default function StartScreen({ onStart, busy, error }) {
   };
 
   /**
-   * Import a review file into this browser. Opening its PDF stays a separate
+   * Import a review file into this browser. Opening its document stays a separate
    * click: browsers only show file pickers in direct response to one.
    */
   const importReviewFile = async (text) => {
@@ -110,13 +109,13 @@ export default function StartScreen({ onStart, busy, error }) {
         }}
       >
         <div className="slot">
-          <div className="slotLabel">PDF preview</div>
+          <div className="slotLabel">PDF or HTML preview</div>
           <p className="muted">
             The rendered document you will read and comment on. Choose it or drop it here — or drop a saved review
             file to continue a review.
           </p>
           <button type="button" className="btn solid big" disabled={busy} onClick={async () => open(await pickFile())}>
-            {busy ? 'Opening…' : 'Open PDF…'}
+            {busy ? 'Opening…' : 'Open PDF or HTML…'}
           </button>
           {(localError || error) && (
             <p className="warn" role="alert">
@@ -143,7 +142,7 @@ export default function StartScreen({ onStart, busy, error }) {
         {imported && (
           <p className="importNote" role="status">
             Review file loaded. Click <strong>{reviews.find((r) => r.sha256 === imported)?.name}</strong> below to open
-            its PDF.
+            its document.
           </p>
         )}
         {reviews.length === 0 ? (
@@ -151,7 +150,7 @@ export default function StartScreen({ onStart, busy, error }) {
         ) : (
           <>
             <p className="muted">
-              Click a file to resume its review. A revised PDF (different content) always starts an empty review.
+              Click a file to resume its review. A revised file (different content) always starts an empty review.
             </p>
             <ul className="recentList">
               {reviews.map((r) => (

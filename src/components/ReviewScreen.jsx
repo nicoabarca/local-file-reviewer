@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import Viewer from './Viewer.jsx';
+import HtmlViewer from './HtmlViewer.jsx';
 import PageSidebar from './PageSidebar.jsx';
+import OutlineSidebar from './OutlineSidebar.jsx';
 import CommentPanel from './CommentPanel.jsx';
 import ExportDialog from './ExportDialog.jsx';
 import { contentSignature, sortComments } from '../lib/exportFeedback.js';
 import { saveTextFile, watchSnapshot } from '../lib/files.js';
+import { HTML_WIDTH, sectionIndexAt } from '../lib/htmlModel.js';
 import { reviewFileName, serializeReview } from '../lib/reviewFile.js';
 import { STORAGE_LOCATION, requestPersistence, saveReview } from '../lib/storage.js';
 
@@ -39,7 +42,7 @@ const clampScale = (s) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, Math.round(s *
 const SELECTION_MESSAGES = {
   'multi-page': (r) =>
     `The selection spans pages ${r.pages.join('–')}. Comments attach to one page — select the part on each page and comment separately.`,
-  outside: () => 'Select text inside a PDF page to comment on it.',
+  outside: () => 'Select text inside the document to comment on it.',
   empty: () => 'Select text first, or press R to draw a region.',
 };
 
@@ -50,14 +53,18 @@ function isTyping(target) {
 const pickOf = (snap) => ({ file: snap.file, handle: snap.handle });
 
 export default function ReviewScreen({ session, onClose, onReopen }) {
-  const { preview, doc, pageSizes } = session;
+  const { kind, preview, doc, html, pageSizes } = session;
+  const isHtml = kind === 'html';
   const viewerRef = useRef(null);
   const zoomAnchor = useRef(null);
 
   const [review, setReview] = useState(session.review);
   const [mode, setMode] = useState('text');
   const [sidebarOpen, setSidebarOpen] = useState(() => readPref(SIDEBAR_KEY, 'open') !== 'closed');
-  const [layout, setLayout] = useState(() => (readPref(LAYOUT_KEY, 'single') === 'spread' ? 'spread' : 'single'));
+  // HTML documents are one continuous page.
+  const [layout, setLayout] = useState(() =>
+    !isHtml && readPref(LAYOUT_KEY, 'single') === 'spread' ? 'spread' : 'single',
+  );
   const [scale, setScale] = useState(1);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageInput, setPageInput] = useState('1');
@@ -72,20 +79,30 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
   const touched = useRef(Boolean(session.restored));
   const persistenceAsked = useRef(false);
   const [fileSavedAt, setFileSavedAt] = useState(null);
+  // HTML only: headings, the section in view, text comments not found in the document.
+  const [outline, setOutline] = useState([]);
+  const [currentSection, setCurrentSection] = useState(-1);
+  const [missing, setMissing] = useState(() => new Set());
 
   const numbered = useMemo(
     () => sortComments(review.comments).map((comment, i) => ({ comment, number: i + 1 })),
     [review.comments],
   );
 
+  /** Comments per page, or per outline section for HTML. */
   const commentCounts = useMemo(() => {
     const counts = new Map();
-    for (const c of review.comments) counts.set(c.page, (counts.get(c.page) ?? 0) + 1);
+    for (const c of review.comments) {
+      const key = isHtml ? sectionIndexAt(outline, c.rects[0][1]) : c.page;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
     return counts;
-  }, [review.comments]);
+  }, [review.comments, isHtml, outline]);
 
   useEffect(() => writePref(SIDEBAR_KEY, sidebarOpen ? 'open' : 'closed'), [sidebarOpen]);
-  useEffect(() => writePref(LAYOUT_KEY, layout), [layout]);
+  useEffect(() => {
+    if (!isHtml) writePref(LAYOUT_KEY, layout);
+  }, [layout, isHtml]);
 
   const exported = review.lastExport?.signature === contentSignature(review);
   const hasUnexported = !exported && (review.comments.length > 0 || review.lastExport != null);
@@ -147,6 +164,7 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
   // ---- zoom -------------------------------------------------------------
   const fitScale = useCallback(() => {
     const width = viewerRef.current?.viewportWidth() ?? 900;
+    if (isHtml) return clampScale((width - PAGE_GUTTER) / HTML_WIDTH);
     let widest = 0;
     if (layout === 'spread') {
       for (let i = 0; i < pageSizes.length; i += 2) {
@@ -154,7 +172,7 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
       }
     } else widest = Math.max(...pageSizes.map((p) => p.width));
     return clampScale((width - PAGE_GUTTER) / widest);
-  }, [pageSizes, layout]);
+  }, [pageSizes, layout, isHtml]);
 
   const zoomTo = useCallback((next) => {
     zoomAnchor.current = viewerRef.current?.getAnchor() ?? null;
@@ -163,8 +181,8 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
   }, []);
 
   useLayoutEffect(() => {
-    setScale(Math.min(fitScale(), 1.25));
-  }, [fitScale]);
+    setScale(Math.min(fitScale(), isHtml ? 1 : 1.25));
+  }, [fitScale, isHtml]);
 
   useLayoutEffect(() => {
     if (!zoomAnchor.current) return;
@@ -177,7 +195,7 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
 
   /** Switch between one page per row and two pages side by side, refitting the width. */
   const changeLayout = (next) => {
-    if (next === layout) return;
+    if (isHtml || next === layout) return;
     zoomAnchor.current = viewerRef.current?.getAnchor() ?? null;
     setPendingSelection(null);
     setLayout(next);
@@ -197,9 +215,20 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
     onCurrentPage(page);
   };
 
+  const goToSection = (i) => {
+    if (outline.length === 0) return;
+    const index = Math.min(outline.length - 1, Math.max(0, i));
+    viewerRef.current?.scrollToSection(index);
+    setCurrentSection(index);
+  };
+
+  /** Next or previous page, or section for HTML. */
+  const stepPlace = (delta) => (isHtml ? goToSection(currentSection + delta) : goToPage(currentPage + delta * pageStep));
+
   // ---- comments ---------------------------------------------------------
   const clearSelection = () => {
     window.getSelection()?.removeAllRanges();
+    viewerRef.current?.clearSelection?.();
     setPendingSelection(null);
   };
 
@@ -276,7 +305,7 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
       setActiveId(id);
       if (!scrollDoc) return;
       const c = review.comments.find((x) => x.id === id);
-      if (c) viewerRef.current?.scrollToRect(c.page, c.rects[0]);
+      if (c) viewerRef.current?.scrollToComment(c);
     },
     [review.comments],
   );
@@ -326,8 +355,8 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
       0: () => zoomTo(fitScale()),
       j: () => step(1),
       k: () => step(-1),
-      ']': () => goToPage(currentPage + pageStep),
-      '[': () => goToPage(currentPage - pageStep),
+      ']': () => stepPlace(1),
+      '[': () => stepPlace(-1),
       e: () => setExportOpen(true),
     };
     const action = actions[e.key.length === 1 ? e.key.toLowerCase() : e.key];
@@ -371,42 +400,56 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
           aria-pressed={sidebarOpen}
           aria-controls="page-sidebar"
           onClick={() => setSidebarOpen((o) => !o)}
-          title="Toggle page sidebar ( S )"
+          title={`Toggle ${isHtml ? 'outline' : 'page sidebar'} ( S )`}
         >
-          Pages <kbd>S</kbd>
+          {isHtml ? 'Outline' : 'Pages'} <kbd>S</kbd>
         </button>
         <div className="identityBar" aria-label="Files in this review">
-          <span className="tag">pdf</span>
+          <span className="tag">{kind}</span>
           <span className="fileName" title={`sha256 ${preview.sha256}`}>{preview.name}</span>
         </div>
 
         <div className="tools" role="toolbar" aria-label="Document tools">
-          <div className="group" role="group" aria-label="Page navigation">
-            <button type="button" className="btn ghost sq" onClick={() => goToPage(currentPage - pageStep)} aria-label="Previous page" title="Previous page ( [ )">
-              ‹
-            </button>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                goToPage(Number(pageInput) || 1);
-                // Hand focus back to the document so single-key shortcuts work again.
-                viewerRef.current?.focus();
-              }}
-            >
-              <input
-                className="pageInput"
-                value={pageInput}
-                inputMode="numeric"
-                aria-label="Page number"
-                onChange={(e) => setPageInput(e.target.value.replace(/\D/g, ''))}
-                onBlur={() => setPageInput(String(currentPage))}
-              />
-            </form>
-            <span className="muted">/ {pageSizes.length}</span>
-            <button type="button" className="btn ghost sq" onClick={() => goToPage(currentPage + pageStep)} aria-label="Next page" title="Next page ( ] )">
-              ›
-            </button>
-          </div>
+          {isHtml ? (
+            <div className="group" role="group" aria-label="Section navigation">
+              <button type="button" className="btn ghost sq" onClick={() => stepPlace(-1)} aria-label="Previous section" title="Previous section ( [ )">
+                ‹
+              </button>
+              <span className="muted sectionName" title={outline[currentSection]?.text}>
+                {outline[currentSection]?.text ?? (outline.length ? 'Top of document' : 'No headings')}
+              </span>
+              <button type="button" className="btn ghost sq" onClick={() => stepPlace(1)} aria-label="Next section" title="Next section ( ] )">
+                ›
+              </button>
+            </div>
+          ) : (
+            <div className="group" role="group" aria-label="Page navigation">
+              <button type="button" className="btn ghost sq" onClick={() => goToPage(currentPage - pageStep)} aria-label="Previous page" title="Previous page ( [ )">
+                ‹
+              </button>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  goToPage(Number(pageInput) || 1);
+                  // Hand focus back to the document so single-key shortcuts work again.
+                  viewerRef.current?.focus();
+                }}
+              >
+                <input
+                  className="pageInput"
+                  value={pageInput}
+                  inputMode="numeric"
+                  aria-label="Page number"
+                  onChange={(e) => setPageInput(e.target.value.replace(/\D/g, ''))}
+                  onBlur={() => setPageInput(String(currentPage))}
+                />
+              </form>
+              <span className="muted">/ {pageSizes.length}</span>
+              <button type="button" className="btn ghost sq" onClick={() => goToPage(currentPage + pageStep)} aria-label="Next page" title="Next page ( ] )">
+                ›
+              </button>
+            </div>
+          )}
 
           <div className="group" role="group" aria-label="Zoom">
             <button type="button" className="btn ghost sq" onClick={() => zoomTo(scale / ZOOM_STEP)} aria-label="Zoom out" title="Zoom out ( - )">
@@ -420,35 +463,37 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
             </button>
           </div>
 
-          <div className="group segmented" role="radiogroup" aria-label="Page layout">
-            <button
-              type="button"
-              role="radio"
-              aria-checked={layout === 'single'}
-              aria-label="One page per row"
-              className={`btn seg${layout === 'single' ? ' on' : ''}`}
-              onClick={() => changeLayout('single')}
-              title="One page per row ( V )"
-            >
-              <span className="layoutIcon" aria-hidden="true">
-                <i />
-              </span>
-            </button>
-            <button
-              type="button"
-              role="radio"
-              aria-checked={layout === 'spread'}
-              aria-label="Two pages side by side"
-              className={`btn seg${layout === 'spread' ? ' on' : ''}`}
-              onClick={() => changeLayout('spread')}
-              title="Two pages side by side ( V )"
-            >
-              <span className="layoutIcon" aria-hidden="true">
-                <i />
-                <i />
-              </span>
-            </button>
-          </div>
+          {!isHtml && (
+            <div className="group segmented" role="radiogroup" aria-label="Page layout">
+              <button
+                type="button"
+                role="radio"
+                aria-checked={layout === 'single'}
+                aria-label="One page per row"
+                className={`btn seg${layout === 'single' ? ' on' : ''}`}
+                onClick={() => changeLayout('single')}
+                title="One page per row ( V )"
+              >
+                <span className="layoutIcon" aria-hidden="true">
+                  <i />
+                </span>
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={layout === 'spread'}
+                aria-label="Two pages side by side"
+                className={`btn seg${layout === 'spread' ? ' on' : ''}`}
+                onClick={() => changeLayout('spread')}
+                title="Two pages side by side ( V )"
+              >
+                <span className="layoutIcon" aria-hidden="true">
+                  <i />
+                  <i />
+                </span>
+              </button>
+            </div>
+          )}
 
           <div className="group segmented" role="radiogroup" aria-label="Comment tool">
             <button
@@ -516,7 +561,7 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
       {restored > 0 && (
         <div className="banner" role="status">
           <p>
-            Restored {restored} autosaved comment{restored === 1 ? '' : 's'} for this exact PDF.
+            Restored {restored} autosaved comment{restored === 1 ? '' : 's'} for this exact {isHtml ? 'file' : 'PDF'}.
           </p>
           <div className="bannerActions">
             <button type="button" className="btn ghost" onClick={() => setRestored(0)}>
@@ -526,7 +571,7 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
               type="button"
               className="btn ghost"
               onClick={() => {
-                if (confirm('Discard the autosaved comments and start an empty review of this PDF?'))
+                if (confirm(`Discard the autosaved comments and start an empty review of this ${isHtml ? 'file' : 'PDF'}?`))
                   onReopen(pickOf(preview), { fresh: true });
               }}
             >
@@ -555,31 +600,59 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
           setPendingSelection(result?.ok ? result : null);
         }}
       >
-        {sidebarOpen && (
-          <PageSidebar
+        {sidebarOpen &&
+          (isHtml ? (
+            <OutlineSidebar
+              outline={outline}
+              current={currentSection}
+              commentCounts={commentCounts}
+              onGoTo={goToSection}
+            />
+          ) : (
+            <PageSidebar
+              doc={doc}
+              pageSizes={pageSizes}
+              currentPage={currentPage}
+              commentCounts={commentCounts}
+              onGoTo={goToPage}
+            />
+          ))}
+        {isHtml ? (
+          <HtmlViewer
+            ref={viewerRef}
+            html={html}
+            scale={scale}
+            mode={mode}
+            numbered={numbered}
+            draft={draft}
+            activeId={activeId}
+            onSelection={onSelection}
+            onActivate={activate}
+            onRegion={onRegion}
+            onOutline={setOutline}
+            onCurrentSection={setCurrentSection}
+            onMissing={setMissing}
+          />
+        ) : (
+          <Viewer
+            ref={viewerRef}
             doc={doc}
             pageSizes={pageSizes}
-            currentPage={currentPage}
-            commentCounts={commentCounts}
-            onGoTo={goToPage}
+            scale={scale}
+            layout={layout}
+            mode={mode}
+            numbered={numbered}
+            draft={draft}
+            activeId={activeId}
+            onCurrentPage={onCurrentPage}
+            onSelection={onSelection}
+            onActivate={activate}
+            onRegion={onRegion}
           />
         )}
-        <Viewer
-          ref={viewerRef}
-          doc={doc}
-          pageSizes={pageSizes}
-          scale={scale}
-          layout={layout}
-          mode={mode}
-          numbered={numbered}
-          draft={draft}
-          activeId={activeId}
-          onCurrentPage={onCurrentPage}
-          onSelection={onSelection}
-          onActivate={activate}
-          onRegion={onRegion}
-        />
         <CommentPanel
+          kind={kind}
+          missing={missing}
           numbered={numbered}
           draft={draft}
           activeId={activeId}
@@ -594,10 +667,10 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
       <footer className="keys" aria-label="Keyboard shortcuts">
         <span><kbd>C</kbd> comment on selection</span>
         <span><kbd>R</kbd> region mode</span>
-        <span><kbd>S</kbd> page sidebar</span>
-        <span><kbd>V</kbd> 1 or 2 pages</span>
+        <span><kbd>S</kbd> {isHtml ? 'outline' : 'page sidebar'}</span>
+        {!isHtml && <span><kbd>V</kbd> 1 or 2 pages</span>}
         <span><kbd>J</kbd>/<kbd>K</kbd> next/prev comment</span>
-        <span><kbd>[</kbd>/<kbd>]</kbd> page</span>
+        <span><kbd>[</kbd>/<kbd>]</kbd> {isHtml ? 'section' : 'page'}</span>
         <span><kbd>+</kbd>/<kbd>−</kbd>/<kbd>0</kbd> zoom</span>
         <span><kbd>E</kbd> agent prompt</span>
         <span><kbd>⌘S</kbd> save to file</span>
@@ -623,7 +696,8 @@ export default function ReviewScreen({ session, onClose, onReopen }) {
       <ExportDialog
         open={exportOpen}
         review={review}
-        pageCount={pageSizes.length}
+        pageCount={isHtml ? null : pageSizes.length}
+        missing={missing}
         blocked={changed}
         onClose={() => setExportOpen(false)}
         onExported={onExported}
